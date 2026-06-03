@@ -1,0 +1,860 @@
+#!/bin/sh
+
+. /usr/share/libubox/jshn.sh
+. /lib/functions.sh
+
+CONFIG="lan_wake"
+CFG_FILE="/etc/config/lan_wake"
+RUNDIR="/tmp/lan-wake"
+VENDOR_CACHE="$RUNDIR/mac-vendors.tsv"
+VENDOR_UPDATER="/usr/libexec/lan-wake-update-mac-vendors.sh"
+SCAN_DIR="$RUNDIR/scans"
+
+ok() {
+	json_init
+	json_add_boolean success 1
+	json_add_string message "${1:-操作成功}"
+	json_add_object data
+	[ -n "$2" ] && eval "$2"
+	json_close_object
+	json_dump
+}
+
+fail() {
+	json_init
+	json_add_boolean success 0
+	json_add_string message "${1:-操作失败}"
+	json_dump
+	exit 0
+}
+
+now() {
+	date +%s
+}
+
+json_escape() {
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+read_input() {
+	INPUT="$(cat)"
+	[ -n "$INPUT" ] || INPUT="{}"
+	json_load "$INPUT" >/dev/null 2>&1 || fail "请求 JSON 格式错误"
+	json_select payload >/dev/null 2>&1 || true
+}
+
+get_in() {
+	json_get_var "$1" "$1"
+}
+
+section_exists() {
+	uci -q get "$CONFIG.$1" >/dev/null 2>&1
+}
+
+normalize_mac() {
+	printf '%s' "$1" | tr '[:lower:]' '[:upper:]'
+}
+
+valid_mac() {
+	printf '%s' "$1" | grep -Eq '^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$'
+}
+
+valid_ipv4() {
+	local ip="$1" oldifs="$IFS" a b c d
+	IFS=.; set -- $ip; IFS="$oldifs"
+	[ $# -eq 4 ] || return 1
+	for n in "$@"; do
+		printf '%s' "$n" | grep -Eq '^[0-9]{1,3}$' || return 1
+		[ "$n" -ge 0 ] 2>/dev/null && [ "$n" -le 255 ] || return 1
+	done
+	return 0
+}
+
+valid_port() {
+	printf '%s' "$1" | grep -Eq '^[0-9]+$' || return 1
+	[ "$1" -ge 1 ] 2>/dev/null && [ "$1" -le 65535 ]
+}
+
+valid_name() {
+	[ -n "$1" ] || return 1
+	printf '%s' "$1" | grep -Eq '[;&|`$<>]' && return 1
+	return 0
+}
+
+valid_id() {
+	printf '%s' "$1" | grep -Eq '^[A-Za-z0-9_]+$'
+}
+
+prefix_to_netmask() {
+	local p="$1"
+	awk -v p="$p" '
+		function pow2(n, r, i) { r = 1; for (i = 0; i < n; i++) r *= 2; return r }
+		BEGIN {
+			if (p !~ /^[0-9]+$/ || p < 0 || p > 32) exit 1;
+			for (i = 1; i <= 4; i++) {
+				if (p >= 8) { o[i] = 255; p -= 8 }
+				else if (p <= 0) { o[i] = 0 }
+				else { o[i] = 256 - pow2(8 - p); p = 0 }
+			}
+			printf "%d.%d.%d.%d\n", o[1], o[2], o[3], o[4]
+		}'
+}
+
+calc_broadcast() {
+	local ip="$1" mask="$2"
+	valid_ipv4 "$ip" && valid_ipv4 "$mask" || return 1
+	awk -v ip="$ip" -v mask="$mask" '
+		BEGIN {
+			split(ip, a, "."); split(mask, m, ".");
+			for (i = 1; i <= 4; i++) {
+				if (m[i] == 255) b[i] = a[i];
+				else if (m[i] == 0) b[i] = 255;
+				else {
+					block = 256 - m[i];
+					b[i] = int(a[i] / block) * block + block - 1;
+				}
+			}
+			printf "%d.%d.%d.%d\n", b[1], b[2], b[3], b[4]
+		}'
+}
+
+detect_lan_broadcast() {
+	local iface cidr ipaddr prefix netmask
+	iface="$(uci -q get "$CONFIG.settings.interface")"
+	[ -n "$iface" ] || iface="$(uci -q get network.lan.device)"
+	[ -n "$iface" ] || iface="$(uci -q get network.lan.ifname)"
+	[ -n "$iface" ] || iface="br-lan"
+
+	if command -v ip >/dev/null 2>&1; then
+		cidr="$(ip -4 addr show dev "$iface" scope global 2>/dev/null | awk '/inet / { print $2; exit }')"
+		if [ -n "$cidr" ]; then
+			ipaddr="${cidr%/*}"
+			prefix="${cidr#*/}"
+			netmask="$(prefix_to_netmask "$prefix")"
+			[ -n "$ipaddr" ] && [ -n "$netmask" ] && calc_broadcast "$ipaddr" "$netmask" && return 0
+		fi
+	fi
+
+	ipaddr="$(uci -q get network.lan.ipaddr)"
+	netmask="$(uci -q get network.lan.netmask)"
+	[ -n "$ipaddr" ] && [ -n "$netmask" ] && calc_broadcast "$ipaddr" "$netmask"
+}
+
+detect_lan_prefix() {
+	local ipaddr
+	if command -v ubus >/dev/null 2>&1; then
+		ipaddr="$(ubus call network.interface.lan status 2>/dev/null | awk '
+			/"address":/ {
+				v = $2
+				gsub(/[",]/, "", v)
+				if (v ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) {
+					print v
+					exit
+				}
+			}
+		')"
+	fi
+	if [ -z "$ipaddr" ] && command -v ip >/dev/null 2>&1; then
+		ipaddr="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '
+			{
+				for (i = 1; i <= NF; i++) {
+					if ($i == "src" && (i + 1) <= NF) {
+						print $(i + 1)
+						exit
+					}
+				}
+			}
+		')"
+	fi
+	[ -n "$ipaddr" ] || ipaddr="$(uci -q get network.lan.ipaddr)"
+	valid_ipv4 "$ipaddr" || ipaddr="192.168.1.1"
+	printf '%s\n' "$ipaddr" | awk -F . '{ print $1 "." $2 "." $3 }'
+}
+
+arp_mac() {
+	local ip="$1"
+	if command -v ip >/dev/null 2>&1; then
+		ip neigh show "$ip" 2>/dev/null | awk '
+			{
+				for (i = 1; i <= NF; i++) {
+					if ($i == "lladdr" && (i + 1) <= NF) {
+						print $(i + 1)
+						exit
+					}
+				}
+			}
+		'
+	fi
+	awk -v ip="$ip" '$1 == ip && $4 != "00:00:00:00:00:00" { print $4; exit }' /proc/net/arp 2>/dev/null
+}
+
+ubus_hint_mac() {
+	local ip="$1"
+	command -v ubus >/dev/null 2>&1 || return 0
+	ubus call luci-rpc getHostHints 2>/dev/null | tr -d '\n\r\t ' | awk -v ip="$ip" '
+		{
+			n = split($0, rows, "},")
+			for (i = 1; i <= n; i++) {
+				if (index(rows[i], "\"" ip "\"")) {
+					if (match(rows[i], /"[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]"/)) {
+						v = substr(rows[i], RSTART + 1, RLENGTH - 2)
+						print v
+						exit
+					}
+				}
+			}
+		}
+	' | awk 'NF { print; exit }'
+}
+
+write_host_hints() {
+	local file="$1"
+	: > "$file" 2>/dev/null || return 0
+	command -v ubus >/dev/null 2>&1 || return 0
+	ubus call luci-rpc getHostHints > "$file" 2>/dev/null || true
+}
+
+ubus_hint_mac_from_file() {
+	local ip="$1" file="$2"
+	[ -s "$file" ] || return 0
+	tr -d '\n\r\t ' < "$file" | awk -v ip="$ip" '
+		{
+			n = split($0, rows, "},")
+			for (i = 1; i <= n; i++) {
+				if (index(rows[i], "\"" ip "\"")) {
+					if (match(rows[i], /"[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]"/)) {
+						v = substr(rows[i], RSTART + 1, RLENGTH - 2)
+						print v
+						exit
+					}
+				}
+			}
+		}
+	' | awk 'NF { print; exit }'
+}
+
+lease_hostname() {
+	local ip="$1"
+	awk -v ip="$ip" '$3 == ip && $4 != "*" { print $4; exit }' /tmp/dhcp.leases 2>/dev/null
+}
+
+mac_hex() {
+	printf '%s' "${1:-}" | awk '{
+		v = toupper($0)
+		gsub(/[:.-]/, "", v)
+		print v
+	}'
+}
+
+mac_vendor_lookup() {
+	local mac="$1" hex p36 p28 p24 vendor
+	[ -n "$mac" ] && [ "$mac" != "-" ] || {
+		printf '%s\n' "-"
+		return 0
+	}
+	hex="$(mac_hex "$mac")"
+	case "$hex" in
+		'' | *[!0-9A-F]* )
+			printf '%s\n' "-"
+			return 0
+		;;
+	esac
+	[ -s "$VENDOR_CACHE" ] || {
+		printf '%s\n' "Unknown"
+		return 0
+	}
+	p36="$(printf '%s' "$hex" | cut -c 1-9)"
+	p28="$(printf '%s' "$hex" | cut -c 1-7)"
+	p24="$(printf '%s' "$hex" | cut -c 1-6)"
+	vendor="$(awk -F '	' -v p36="$p36" -v p28="$p28" -v p24="$p24" '
+		$2 == 36 && $1 == p36 { print $3; found = 1; exit }
+		$2 == 28 && $1 == p28 { v28 = $3 }
+		$2 == 24 && $1 == p24 { v24 = $3 }
+		END {
+			if (!found) {
+				if (v28) print v28
+				else if (v24) print v24
+			}
+		}
+	' "$VENDOR_CACHE" 2>/dev/null)"
+	[ -n "$vendor" ] || vendor="Unknown"
+	printf '%s\n' "$vendor"
+}
+
+update_vendor_cache() {
+	local stamp today lock
+	mkdir -p "$RUNDIR" 2>/dev/null || return 0
+	[ -x "$VENDOR_UPDATER" ] || return 0
+
+	stamp="$RUNDIR/mac-vendors.last"
+	today="$(date +%F 2>/dev/null)"
+	if [ -n "$today" ] && [ -s "$VENDOR_CACHE" ] && [ -r "$stamp" ] && [ "$(cat "$stamp" 2>/dev/null)" = "$today" ]; then
+		return 0
+	fi
+
+	lock="$RUNDIR/vendor-update.lock"
+	(
+		mkdir "$lock" 2>/dev/null || exit 0
+		trap 'rmdir "$lock" 2>/dev/null' EXIT INT TERM
+		"$VENDOR_UPDATER" >/dev/null 2>&1 || true
+	) >/dev/null 2>&1 &
+}
+
+ensure_perms() {
+	[ -f "$CFG_FILE" ] && chmod 600 "$CFG_FILE" >/dev/null 2>&1
+}
+
+commit_cfg() {
+	uci -q commit "$CONFIG" || fail "保存配置失败"
+	ensure_perms
+}
+
+find_wol_tool() {
+	if command -v wakeonlan >/dev/null 2>&1; then
+		echo wakeonlan
+	elif command -v etherwake >/dev/null 2>&1; then
+		echo etherwake
+	else
+		echo ""
+	fi
+}
+
+json_device() {
+	local s="$1" status="$2"
+	json_add_object
+	json_add_string id "$s"
+	for opt in name mac ip broadcast port group note enabled icon order check_interval wake_auto_check boot_auto_check offline_time unknown_time last_seen_at last_checked_at failed_since pending_since pending_status; do
+		local v
+		v="$(uci -q get "$CONFIG.$s.$opt")"
+		[ "$opt" = "mac" ] && v="$(normalize_mac "$v")"
+		json_add_string "$opt" "$v"
+	done
+	json_add_string status "$status"
+	json_close_object
+}
+
+calc_status() {
+	local s="$1" current stored pending pending_since timeout n last_seen last_checked failed_since
+	n="$(now)"
+	stored="$(uci -q get "$CONFIG.$s.status")"
+	pending="$(uci -q get "$CONFIG.$s.pending_status")"
+	pending_since="$(uci -q get "$CONFIG.$s.pending_since")"
+	if [ "$pending" = "waking" ]; then
+		timeout="$(uci -q get "$CONFIG.settings.wake_timeout")"
+		[ -n "$timeout" ] || timeout=120
+		if [ -n "$pending_since" ] && [ $((n - pending_since)) -lt "$timeout" ]; then
+			echo "$pending"
+			return
+		fi
+		uci -q delete "$CONFIG.$s.pending_status"
+		uci -q delete "$CONFIG.$s.pending_since"
+		commit_cfg >/dev/null
+	fi
+	[ -n "$stored" ] && echo "$stored" || echo unchecked
+}
+
+check_device_raw() {
+	local s="$1" ip
+	ip="$(uci -q get "$CONFIG.$s.ip")"
+	[ -n "$ip" ] || return 1
+	ping -c 1 -W 2 "$ip" >/dev/null 2>&1
+}
+
+check_and_update() {
+	local s="$1" n last_seen failed_since unknown_time offline_time status pending pending_since wake_timeout
+	section_exists "$s" || fail "设备不存在"
+	n="$(now)"
+	unknown_time="$(uci -q get "$CONFIG.$s.unknown_time")"
+	offline_time="$(uci -q get "$CONFIG.$s.offline_time")"
+	pending="$(uci -q get "$CONFIG.$s.pending_status")"
+	pending_since="$(uci -q get "$CONFIG.$s.pending_since")"
+	wake_timeout="$(uci -q get "$CONFIG.settings.wake_timeout")"
+	[ -n "$unknown_time" ] || unknown_time="$(uci -q get "$CONFIG.settings.unknown_time")"
+	[ -n "$offline_time" ] || offline_time="$(uci -q get "$CONFIG.settings.offline_time")"
+	[ -n "$unknown_time" ] || unknown_time=300
+	[ -n "$offline_time" ] || offline_time=3600
+	[ -n "$wake_timeout" ] || wake_timeout=120
+
+	if check_device_raw "$s"; then
+		status="online"
+		uci -q set "$CONFIG.$s.status=online"
+		uci -q set "$CONFIG.$s.last_seen_at=$n"
+		uci -q set "$CONFIG.$s.last_checked_at=$n"
+		uci -q delete "$CONFIG.$s.failed_since"
+		uci -q delete "$CONFIG.$s.pending_status"
+		uci -q delete "$CONFIG.$s.pending_since"
+	else
+		if [ "$pending" = "waking" ]; then
+			if [ -n "$pending_since" ] && [ $((n - pending_since)) -lt "$wake_timeout" ]; then
+				status="waking"
+				uci -q set "$CONFIG.$s.status=$status"
+				uci -q set "$CONFIG.$s.last_checked_at=$n"
+				commit_cfg
+				echo "$status"
+				return
+			fi
+			uci -q delete "$CONFIG.$s.pending_status"
+			uci -q delete "$CONFIG.$s.pending_since"
+		fi
+		last_seen="$(uci -q get "$CONFIG.$s.last_seen_at")"
+		failed_since="$(uci -q get "$CONFIG.$s.failed_since")"
+		[ -n "$failed_since" ] || failed_since="$n"
+		uci -q set "$CONFIG.$s.failed_since=$failed_since"
+		uci -q set "$CONFIG.$s.last_checked_at=$n"
+		if [ -n "$last_seen" ] && [ $((n - last_seen)) -le "$unknown_time" ]; then
+			status="unknown"
+		elif [ $((n - failed_since)) -ge "$offline_time" ]; then
+			status="offline"
+		else
+			status="unknown"
+		fi
+		uci -q set "$CONFIG.$s.status=$status"
+	fi
+	commit_cfg
+	echo "$status"
+}
+
+validate_device_input() {
+	local editing="$1"
+	get_in name; get_in mac; get_in ip; get_in broadcast; get_in port
+	valid_name "$name" || fail "设备名称不能为空，且不能包含危险字符"
+	valid_mac "$mac" || fail "MAC 地址格式错误"
+	[ -z "$ip" ] || valid_ipv4 "$ip" || fail "IP 地址格式错误"
+	[ -z "$broadcast" ] || valid_ipv4 "$broadcast" || fail "广播地址格式错误"
+	[ -n "$port" ] || port="$(uci -q get "$CONFIG.settings.default_port")"
+	[ -n "$port" ] || port=9
+	valid_port "$port" || fail "WOL 端口必须为 1 到 65535"
+}
+
+set_device_options() {
+	local s="$1" opt val
+	for opt in name mac ip broadcast port group note enabled icon check_interval wake_auto_check boot_auto_check offline_time unknown_time; do
+		json_get_var val "$opt"
+		[ "$opt" = "mac" ] && val="$(normalize_mac "$val")"
+		if [ -n "$val" ]; then
+			uci -q set "$CONFIG.$s.$opt=$val"
+		else
+			uci -q delete "$CONFIG.$s.$opt"
+		fi
+	done
+	[ -n "$(uci -q get "$CONFIG.$s.enabled")" ] || uci -q set "$CONFIG.$s.enabled=1"
+	[ -n "$(uci -q get "$CONFIG.$s.port")" ] || uci -q set "$CONFIG.$s.port=9"
+	[ -n "$(uci -q get "$CONFIG.$s.icon")" ] || uci -q set "$CONFIG.$s.icon=pc"
+	[ -n "$(uci -q get "$CONFIG.$s.order")" ] || uci -q set "$CONFIG.$s.order=$(date +%s)"
+	[ -n "$(uci -q get "$CONFIG.$s.status")" ] || uci -q set "$CONFIG.$s.status=unchecked"
+}
+
+list_devices() {
+	local groups=""
+	json_init
+	json_add_boolean success 1
+	json_add_string message "操作成功"
+	json_add_object data
+	json_add_array devices
+	config_load "$CONFIG"
+	config_foreach list_one_device device
+	json_close_array
+	json_close_object
+	json_dump
+}
+
+list_one_device() {
+	local s="$1" status
+	status="$(calc_status "$s")"
+	json_device "$s" "$status"
+}
+
+get_device() {
+	read_input
+	get_in id
+	valid_id "$id" || fail "设备 ID 不合法"
+	section_exists "$id" || fail "设备不存在"
+	json_init
+	json_add_boolean success 1
+	json_add_string message "操作成功"
+	json_add_object data
+	json_device "$id" "$(calc_status "$id")"
+	json_close_object
+	json_dump
+}
+
+add_device() {
+	read_input
+	validate_device_input 0
+	local sid
+	sid="dev_$(date +%s)_$$"
+	uci -q set "$CONFIG.$sid=device"
+	set_device_options "$sid"
+	commit_cfg
+	ok "设备已添加" "json_add_string id '$sid'"
+}
+
+update_device() {
+	read_input
+	get_in id
+	valid_id "$id" || fail "设备 ID 不合法"
+	section_exists "$id" || fail "设备不存在"
+	validate_device_input 1
+	set_device_options "$id"
+	commit_cfg
+	ok "设备已更新" "json_add_string id '$id'"
+}
+
+delete_device() {
+	read_input
+	get_in id
+	valid_id "$id" || fail "设备 ID 不合法"
+	section_exists "$id" || fail "设备不存在"
+	uci -q delete "$CONFIG.$id"
+	commit_cfg
+	ok "设备已删除"
+}
+
+update_order() {
+	read_input
+	local idx=1 key id keys
+	json_select ids >/dev/null 2>&1 || fail "排序数据格式错误"
+	json_get_keys keys
+	for key in $keys; do
+		json_get_var id "$key"
+		valid_id "$id" || fail "设备 ID 不合法"
+		section_exists "$id" || fail "设备不存在"
+		uci -q set "$CONFIG.$id.order=$idx"
+		idx=$((idx + 1))
+	done
+	json_select ..
+	commit_cfg
+	ok "排序已保存"
+}
+
+wake_device() {
+	read_input
+	get_in id
+	valid_id "$id" || fail "设备 ID 不合法"
+	section_exists "$id" || fail "设备不存在"
+	[ "$(uci -q get "$CONFIG.$id.enabled")" = "0" ] && fail "设备已禁用"
+	local mac broadcast port iface n
+	mac="$(uci -q get "$CONFIG.$id.mac")"
+	broadcast="$(uci -q get "$CONFIG.$id.broadcast")"
+	port="$(uci -q get "$CONFIG.$id.port")"
+	iface="$(uci -q get "$CONFIG.settings.interface")"
+	[ -n "$broadcast" ] || broadcast="$(uci -q get "$CONFIG.settings.default_broadcast")"
+	[ -n "$broadcast" ] || broadcast="$(detect_lan_broadcast)"
+	[ -n "$port" ] || port="$(uci -q get "$CONFIG.settings.default_port")"
+	[ -n "$port" ] || port=9
+	[ -n "$iface" ] || iface=br-lan
+	valid_mac "$mac" || fail "设备 MAC 地址无效"
+	[ -z "$broadcast" ] || valid_ipv4 "$broadcast" || fail "广播地址无效"
+	valid_port "$port" || fail "WOL 端口无效"
+	if command -v wakeonlan >/dev/null 2>&1; then
+		if [ -n "$broadcast" ]; then
+			wakeonlan -i "$broadcast" -p "$port" "$mac" >/dev/null 2>&1 || fail "发送唤醒包失败"
+		else
+			wakeonlan -p "$port" "$mac" >/dev/null 2>&1 || fail "发送唤醒包失败"
+		fi
+	elif command -v etherwake >/dev/null 2>&1; then
+		[ "$port" = "9" ] || fail "自定义 WOL 端口需要安装 wakeonlan"
+		etherwake -i "$iface" "$mac" >/dev/null 2>&1 || fail "发送唤醒包失败"
+	else
+		fail "未安装 etherwake 或 wakeonlan"
+	fi
+	n="$(now)"
+	uci -q set "$CONFIG.$id.status=waking"
+	uci -q set "$CONFIG.$id.pending_status=waking"
+	uci -q set "$CONFIG.$id.pending_since=$n"
+	commit_cfg
+	ok "唤醒指令已发送"
+}
+
+check_status() {
+	read_input
+	get_in id
+	valid_id "$id" || fail "设备 ID 不合法"
+	local status
+	status="$(check_and_update "$id")"
+	ok "检测完成" "json_add_string status '$status'"
+}
+
+check_all_status() {
+	json_init
+	json_add_boolean success 1
+	json_add_string message "检测完成"
+	json_add_object data
+	json_add_array devices
+	config_load "$CONFIG"
+	config_foreach check_one_device device
+	json_close_array
+	json_close_object
+	json_dump
+}
+
+check_one_device() {
+	local s="$1" status enabled
+	enabled="$(uci -q get "$CONFIG.$s.enabled")"
+	if [ "$enabled" = "0" ]; then
+		status="$(calc_status "$s")"
+	else
+		status="$(check_and_update "$s")"
+	fi
+	json_device "$s" "$status"
+}
+
+scan_devices() {
+	local prefix tmp online sorted hints ip mac vendor hostname count
+	update_vendor_cache
+	prefix="$(detect_lan_prefix)"
+	tmp="/tmp/lan-wake-scan.$$"
+	online="$tmp/online"
+	sorted="$tmp/sorted"
+	hints="$tmp/hints.json"
+	mkdir -p "$tmp" || fail "创建扫描临时目录失败"
+	: > "$online"
+
+	count=0
+	for i in $(seq 1 254); do
+		ip="$prefix.$i"
+		(
+			if ping -c 1 -W 1 "$ip" >/dev/null 2>&1; then
+				printf '%s\n' "$ip" >> "$online"
+			fi
+		) &
+		count=$((count + 1))
+		if [ $((count % 64)) -eq 0 ]; then
+			wait
+		fi
+	done
+	wait
+	write_host_hints "$hints"
+
+	json_init
+	json_add_boolean success 1
+	json_add_string message "扫描完成"
+	json_add_object data
+	json_add_string prefix "$prefix"
+	json_add_array devices
+	if [ -s "$online" ]; then
+		awk -F . 'NF == 4 { printf "%03d\t%s\n", $4, $0 }' "$online" | sort -n | awk -F '\t' '{ print $2 }' > "$sorted"
+		while read -r ip; do
+			valid_ipv4 "$ip" || continue
+			mac="$(arp_mac "$ip" | awk 'NF { print; exit }')"
+			[ -n "$mac" ] || mac="$(ubus_hint_mac_from_file "$ip" "$hints")"
+			[ -n "$mac" ] || mac="-"
+			mac="$(normalize_mac "$mac")"
+			vendor="$(mac_vendor_lookup "$mac")"
+			hostname="$(lease_hostname "$ip")"
+			[ -n "$hostname" ] || hostname="-"
+			json_add_object
+			json_add_string ip "$ip"
+			json_add_string mac "$mac"
+			json_add_string vendor "$vendor"
+			json_add_string hostname "$hostname"
+			json_close_object
+		done < "$sorted"
+	fi
+	json_close_array
+	json_close_object
+	rm -rf "$tmp"
+	json_dump
+}
+
+valid_job_id() {
+	case "$1" in
+		'' | *[!A-Za-z0-9._-]* ) return 1 ;;
+	esac
+	return 0
+}
+
+scan_devices_job() {
+	local jobdir="$1" prefix online sorted hints devices tmp_devices ip mac vendor hostname count found
+	mkdir -p "$jobdir" 2>/dev/null || exit 0
+	echo "running" > "$jobdir/status"
+	echo "0" > "$jobdir/scanned"
+
+	update_vendor_cache
+	prefix="$(detect_lan_prefix)"
+	online="$jobdir/online"
+	sorted="$jobdir/sorted"
+	hints="$jobdir/hints.json"
+	devices="$jobdir/devices.tsv"
+	tmp_devices="$jobdir/devices.tmp"
+	: > "$online"
+	: > "$tmp_devices"
+	printf '%s\n' "$prefix" > "$jobdir/prefix"
+
+	count=0
+	for i in $(seq 1 254); do
+		ip="$prefix.$i"
+		(
+			if ping -c 1 -W 1 "$ip" >/dev/null 2>&1; then
+				printf '%s\n' "$ip" >> "$online"
+			fi
+		) &
+		count=$((count + 1))
+		if [ $((count % 64)) -eq 0 ]; then
+			wait
+		fi
+	done
+	wait
+
+	write_host_hints "$hints"
+	found=0
+	if [ -s "$online" ]; then
+		awk -F . 'NF == 4 { printf "%03d\t%s\n", $4, $0 }' "$online" | sort -n | awk -F '\t' '{ print $2 }' > "$sorted"
+		while read -r ip; do
+			valid_ipv4 "$ip" || continue
+			mac="$(arp_mac "$ip" | awk 'NF { print; exit }')"
+			[ -n "$mac" ] || mac="$(ubus_hint_mac_from_file "$ip" "$hints")"
+			[ -n "$mac" ] || mac="-"
+			mac="$(normalize_mac "$mac")"
+			vendor="$(mac_vendor_lookup "$mac")"
+			hostname="$(lease_hostname "$ip")"
+			[ -n "$hostname" ] || hostname="-"
+			printf '%s\t%s\t%s\t%s\n' "$ip" "$mac" "$vendor" "$hostname" >> "$tmp_devices"
+			found=$((found + 1))
+			printf '%s\n' "$found" > "$jobdir/scanned"
+		done < "$sorted"
+	fi
+
+	mv "$tmp_devices" "$devices" 2>/dev/null || true
+	echo "done" > "$jobdir/status"
+}
+
+start_scan_devices() {
+	local job_id jobdir
+	mkdir -p "$SCAN_DIR" 2>/dev/null || fail "创建扫描任务目录失败"
+	job_id="$(date +%s 2>/dev/null)-$$"
+	jobdir="$SCAN_DIR/$job_id"
+	mkdir -p "$jobdir" 2>/dev/null || fail "创建扫描任务失败"
+	echo "starting" > "$jobdir/status"
+	echo "0" > "$jobdir/scanned"
+
+	(scan_devices_job "$jobdir") >/dev/null 2>&1 &
+
+	json_init
+	json_add_boolean success 1
+	json_add_string message "扫描任务已开始"
+	json_add_object data
+	json_add_string job_id "$job_id"
+	json_add_string status "running"
+	json_close_object
+	json_dump
+}
+
+get_scan_devices() {
+	local job_id jobdir status scanned prefix devices ip mac vendor hostname
+	read_input
+	json_get_var job_id job_id
+	valid_job_id "$job_id" || fail "扫描任务无效"
+
+	jobdir="$SCAN_DIR/$job_id"
+	[ -d "$jobdir" ] || fail "扫描任务不存在"
+	status="$(cat "$jobdir/status" 2>/dev/null)"
+	[ -n "$status" ] || status="running"
+	scanned="$(cat "$jobdir/scanned" 2>/dev/null)"
+	[ -n "$scanned" ] || scanned="0"
+	prefix="$(cat "$jobdir/prefix" 2>/dev/null)"
+	devices="$jobdir/devices.tsv"
+
+	json_init
+	json_add_boolean success 1
+	json_add_string message "扫描状态"
+	json_add_object data
+	json_add_string job_id "$job_id"
+	json_add_string status "$status"
+	json_add_int scanned "$scanned"
+	[ -n "$prefix" ] && json_add_string prefix "$prefix"
+	json_add_array devices
+	if [ "$status" = "done" ] && [ -s "$devices" ]; then
+		while IFS='	' read -r ip mac vendor hostname; do
+			json_add_object
+			json_add_string ip "$ip"
+			json_add_string mac "$mac"
+			json_add_string vendor "$vendor"
+			json_add_string hostname "$hostname"
+			json_close_object
+		done < "$devices"
+	fi
+	json_close_array
+	json_close_object
+	json_dump
+}
+
+get_dependencies() {
+	local wol
+	[ -n "$(find_wol_tool)" ] && wol=1 || wol=0
+	ok "操作成功" "json_add_boolean wol $wol; json_add_string wol_tool '$(find_wol_tool)'"
+}
+
+get_settings() {
+	local opt val auto_broadcast
+	auto_broadcast="$(detect_lan_broadcast)"
+	json_init
+	json_add_boolean success 1
+	json_add_string message "操作成功"
+	json_add_object data
+	for opt in interface check_interval unknown_time offline_time wake_check_interval wake_timeout default_broadcast default_port auto_check; do
+		val="$(uci -q get "$CONFIG.settings.$opt")"
+		if [ "$opt" = "default_broadcast" ] && { [ -z "$val" ] || [ "$val" = "192.168.1.255" ]; }; then
+			[ -n "$auto_broadcast" ] && val="$auto_broadcast"
+		fi
+		json_add_string "$opt" "$val"
+	done
+	json_close_object
+	json_dump
+}
+
+update_settings() {
+	read_input
+	local opt val
+	for opt in interface check_interval unknown_time offline_time wake_check_interval wake_timeout default_broadcast default_port auto_check; do
+		json_get_var val "$opt"
+		[ -n "$val" ] && uci -q set "$CONFIG.settings.$opt=$val"
+	done
+	commit_cfg
+	ok "设置已保存"
+}
+
+case "$1" in
+	list)
+		cat <<'EOF'
+{
+	"list_devices": {},
+	"get_device": { "payload": "object" },
+	"add_device": { "payload": "object" },
+	"update_device": { "payload": "object" },
+	"delete_device": { "payload": "object" },
+	"update_order": { "payload": "object" },
+	"wake_device": { "payload": "object" },
+	"check_status": { "payload": "object" },
+	"check_all_status": {},
+	"scan_devices": {},
+	"start_scan_devices": {},
+	"get_scan_devices": { "payload": "object" },
+	"get_dependencies": {},
+	"get_settings": {},
+	"update_settings": { "payload": "object" }
+}
+EOF
+	;;
+	call)
+		case "$2" in
+			list_devices) list_devices ;;
+			get_device) get_device ;;
+			add_device) add_device ;;
+			update_device) update_device ;;
+			delete_device) delete_device ;;
+			update_order) update_order ;;
+			wake_device) wake_device ;;
+			check_status) check_status ;;
+			check_all_status) check_all_status ;;
+			scan_devices) scan_devices ;;
+			start_scan_devices) start_scan_devices ;;
+			get_scan_devices) get_scan_devices ;;
+			get_dependencies) get_dependencies ;;
+			get_settings) get_settings ;;
+			update_settings) update_settings ;;
+			*) fail "未知接口" ;;
+		esac
+	;;
+	*) fail "未知调用方式" ;;
+esac

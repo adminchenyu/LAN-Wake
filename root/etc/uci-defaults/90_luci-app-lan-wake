@@ -1,0 +1,34 @@
+#!/bin/sh
+
+if [ -f /etc/config/lan_wake ]; then
+	chmod 600 /etc/config/lan_wake
+fi
+
+current_check_interval="$(uci -q get lan_wake.settings.check_interval)"
+current_wake_interval="$(uci -q get lan_wake.settings.wake_check_interval)"
+current_wake_timeout="$(uci -q get lan_wake.settings.wake_timeout)"
+changed=0
+
+if [ -z "$current_check_interval" ] || [ "$current_check_interval" = "120" ]; then
+	uci -q set lan_wake.settings.check_interval='300'
+	changed=1
+fi
+
+if [ -z "$current_wake_interval" ] || [ "$current_wake_interval" = "1" ]; then
+	uci -q set lan_wake.settings.wake_check_interval='5'
+	changed=1
+fi
+
+if [ -z "$current_wake_timeout" ] || [ "$current_wake_timeout" = "120" ]; then
+	uci -q set lan_wake.settings.wake_timeout='300'
+	changed=1
+fi
+
+[ "$changed" = "1" ] && uci -q commit lan_wake
+
+uci -q batch <<'EOF'
+set ucitrack.@lan_wake[-1].init='lan_wake'
+commit ucitrack
+EOF
+
+exit 0

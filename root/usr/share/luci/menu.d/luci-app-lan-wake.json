@@ -1,0 +1,13 @@
+{
+	"admin/services/lan-wake": {
+		"title": "局域网设备唤醒",
+		"order": 65,
+		"action": {
+			"type": "view",
+			"path": "lan-wake"
+		},
+		"depends": {
+			"acl": [ "luci-app-lan-wake" ]
+		}
+	}
+}

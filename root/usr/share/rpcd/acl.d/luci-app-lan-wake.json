@@ -1,0 +1,39 @@
+{
+	"luci-app-lan-wake": {
+		"description": "Grant access to LuCI app LAN Wake",
+		"read": {
+			"ubus": {
+				"lan-wake": [
+					"list_devices",
+					"get_device",
+					"check_status",
+					"check_all_status",
+					"scan_devices",
+					"start_scan_devices",
+					"get_scan_devices",
+					"get_dependencies",
+					"get_settings"
+				]
+			},
+			"uci": [ "lan_wake" ]
+		},
+		"write": {
+			"ubus": {
+				"lan-wake": [
+					"add_device",
+					"update_device",
+					"delete_device",
+					"update_order",
+					"wake_device",
+					"check_status",
+					"check_all_status",
+					"scan_devices",
+					"start_scan_devices",
+					"get_scan_devices",
+					"update_settings"
+				]
+			},
+			"uci": [ "lan_wake" ]
+		}
+	}
+}

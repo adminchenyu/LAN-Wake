@@ -1,0 +1,8 @@
+msgid "Wake-on-LAN"
+msgstr "局域网设备唤醒"
+
+msgid "LAN Wake"
+msgstr "局域网设备唤醒"
+
+msgid "Wake devices on the local network through Wake-on-LAN"
+msgstr "通过 Wake-on-LAN 远程唤醒局域网内的设备"
