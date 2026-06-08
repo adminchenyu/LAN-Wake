@@ -922,7 +922,7 @@ function filterBar(root) {
 	]);
 }
 
-function formTabs(enabledValue, bootAutoCheck, wakeAutoCheck) {
+function formTabs(enabledValue, bootAutoCheck, wakeAutoCheck, broadcastWol) {
 	return E('div', { 'class': 'lw-tabs-bar' }, [
 		E('div', { 'class': 'lw-tabs' }, [
 			E('button', { 'class': 'active', 'data-tab': 'base' }, '基本信息'),
@@ -940,6 +940,10 @@ function formTabs(enabledValue, bootAutoCheck, wakeAutoCheck) {
 			E('label', { 'class': 'lw-enable-inline' }, [
 				E('span', {}, '唤醒后自动检测'),
 				E('input', { name: 'wake_auto_check', type: 'checkbox', checked: wakeAutoCheck !== '0' })
+			]),
+			E('label', { 'class': 'lw-enable-inline' }, [
+				E('span', {}, '发送到广播地址'),
+				E('input', { name: 'broadcast_wol', type: 'checkbox', checked: broadcastWol === '1' || broadcastWol === true })
 			])
 		])
 	]);
@@ -963,7 +967,7 @@ function showDeviceModal(device, root) {
 	var d = device || {};
 	var iconValue = d.icon || 'pc';
 	var body = E('div', { 'class': 'lw-modal-form' }, [
-		formTabs(d.enabled !== '0', d.boot_auto_check, d.wake_auto_check),
+		formTabs(d.enabled !== '0', d.boot_auto_check, d.wake_auto_check, d.broadcast_wol),
 		E('div', { 'class': 'lw-tab-panel active', 'data-panel': 'base' }, [
 			E('div', { 'class': 'lw-scan-slot lw-wide' }),
 			field('name', '设备名称 *', d.name, 'text', '例如：NAS 服务器'),

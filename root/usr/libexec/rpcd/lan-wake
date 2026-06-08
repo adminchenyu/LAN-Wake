@@ -323,7 +323,7 @@ json_device() {
 	local s="$1" status="$2"
 	json_add_object
 	json_add_string id "$s"
-	for opt in name mac ip broadcast port group note enabled icon order check_interval wake_auto_check boot_auto_check offline_time unknown_time last_seen_at last_checked_at failed_since pending_since pending_status; do
+	for opt in name mac ip broadcast port group note enabled icon order check_interval wake_auto_check boot_auto_check broadcast_wol offline_time unknown_time last_seen_at last_checked_at failed_since pending_since pending_status; do
 		local v
 		v="$(uci -q get "$CONFIG.$s.$opt")"
 		[ "$opt" = "mac" ] && v="$(normalize_mac "$v")"
@@ -428,7 +428,7 @@ validate_device_input() {
 
 set_device_options() {
 	local s="$1" opt val
-	for opt in name mac ip broadcast port group note enabled icon check_interval wake_auto_check boot_auto_check offline_time unknown_time; do
+	for opt in name mac ip broadcast port group note enabled icon check_interval wake_auto_check boot_auto_check broadcast_wol offline_time unknown_time; do
 		json_get_var val "$opt"
 		[ "$opt" = "mac" ] && val="$(normalize_mac "$val")"
 		if [ -n "$val" ]; then
@@ -533,11 +533,12 @@ wake_device() {
 	valid_id "$id" || fail "设备 ID 不合法"
 	section_exists "$id" || fail "设备不存在"
 	[ "$(uci -q get "$CONFIG.$id.enabled")" = "0" ] && fail "设备已禁用"
-	local mac broadcast port iface n
+	local mac broadcast port iface use_broadcast n
 	mac="$(uci -q get "$CONFIG.$id.mac")"
 	broadcast="$(uci -q get "$CONFIG.$id.broadcast")"
 	port="$(uci -q get "$CONFIG.$id.port")"
 	iface="$(uci -q get "$CONFIG.settings.interface")"
+	use_broadcast="$(uci -q get "$CONFIG.$id.broadcast_wol")"
 	[ -n "$broadcast" ] || broadcast="$(uci -q get "$CONFIG.settings.default_broadcast")"
 	[ -n "$broadcast" ] || broadcast="$(detect_lan_broadcast)"
 	[ -n "$port" ] || port="$(uci -q get "$CONFIG.settings.default_port")"
@@ -554,7 +555,11 @@ wake_device() {
 		fi
 	elif command -v etherwake >/dev/null 2>&1; then
 		[ "$port" = "9" ] || fail "自定义 WOL 端口需要安装 wakeonlan"
-		etherwake -i "$iface" "$mac" >/dev/null 2>&1 || fail "发送唤醒包失败"
+		if [ "$use_broadcast" = "1" ]; then
+			etherwake -b -i "$iface" "$mac" >/dev/null 2>&1 || fail "发送唤醒包失败"
+		else
+			etherwake -i "$iface" "$mac" >/dev/null 2>&1 || fail "发送唤醒包失败"
+		fi
 	else
 		fail "未安装 etherwake 或 wakeonlan"
 	fi
