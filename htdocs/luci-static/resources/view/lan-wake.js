@@ -36,6 +36,9 @@ var state = {
 	backendRetry: null,
 	backendRetryCount: 0,
 	modalBlurTimer: null,
+	modalOpen: false,
+	modalRoot: null,
+	deferredRender: false,
 	scanning: false
 };
 
@@ -64,6 +67,8 @@ var iconMap = {
 	devboard: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxZW0iIGhlaWdodD0iMWVtIiB2aWV3Qm94PSIwIDAgMTYgMTYiPgoJPHBhdGggZD0iTTAgMGgxNnYxNkgweiIgZmlsbD0ibm9uZSIgLz4KCTxnIGZpbGw9ImN1cnJlbnRDb2xvciI+CgkJPHBhdGggZD0iTTExLjUgMmEuNS41IDAgMCAxIC41LjV2N2EuNS41IDAgMCAxLTEgMHYtN2EuNS41IDAgMCAxIC41LS41bTIgMGEuNS41IDAgMCAxIC41LjV2N2EuNS41IDAgMCAxLTEgMHYtN2EuNS41IDAgMCAxIC41LS41bS0xMCA4YS41LjUgMCAwIDAgMCAxaDZhLjUuNSAwIDAgMCAwLTF6bTAgMmEuNS41IDAgMCAwIDAgMWg2YS41LjUgMCAwIDAgMC0xek01IDNhMSAxIDAgMCAwLTEgMWgtLjVhLjUuNSAwIDAgMCAwIDFINHYxaC0uNWEuNS41IDAgMCAwIDAgMUg0YTEgMSAwIDAgMCAxIDF2LjVhLjUuNSAwIDAgMCAxIDBWOGgxdi41YS41LjUgMCAwIDAgMSAwVjhhMSAxIDAgMCAwIDEtMWguNWEuNS41IDAgMCAwIDAtMUg5VjVoLjVhLjUuNSAwIDAgMCAwLTFIOWExIDEgMCAwIDAtMS0xdi0uNWEuNS41IDAgMCAwLTEgMFYzSDZ2LS41YS41LjUgMCAwIDAtMSAwem0wIDFoM3YzSDV6bTYuNSA3YS41LjUgMCAwIDAtLjUuNXYxYS41LjUgMCAwIDAgLjUuNWgyYS41LjUgMCAwIDAgLjUtLjV2LTFhLjUuNSAwIDAgMC0uNS0uNXoiIC8+CgkJPHBhdGggZD0iTTEgMmEyIDIgMCAwIDEgMi0yaDExYTIgMiAwIDAgMSAyIDJ2MTFhMiAyIDAgMCAxLTIgMkgzYTIgMiAwIDAgMS0yLTJ2LTJILjVhLjUuNSAwIDAgMS0uNS0uNXYtMUEuNS41IDAgMCAxIC41IDlIMVY4SC41YS41LjUgMCAwIDEtLjUtLjV2LTFBLjUuNSAwIDAgMSAuNSA2SDFWNUguNWEuNS41IDAgMCAxLS41LS41di0yQS41LjUgMCAwIDEgLjUgMnptMSAxMWExIDEgMCAwIDAgMSAxaDExYTEgMSAwIDAgMCAxLTFWMmExIDEgMCAwIDAtMS0xSDNhMSAxIDAgMCAwLTEgMXoiIC8+Cgk8L2c+Cjwvc3ZnPgo=',
 	other: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxZW0iIGhlaWdodD0iMWVtIiB2aWV3Qm94PSIwIDAgMjQgMjQiPgoJPHBhdGggZD0iTTAgMGgyNHYyNEgweiIgZmlsbD0ibm9uZSIgLz4KCTxwYXRoIGZpbGw9ImN1cnJlbnRDb2xvciIgZD0iTTQgMjBxLS44MjUgMC0xLjQxMi0uNTg3VDIgMThWNnEwLS44MjUuNTg4LTEuNDEyVDQgNGgxN3EuNDI1IDAgLjcxMy4yODhUMjIgNXQtLjI4OC43MTNUMjEgNkg0djEyaDFxLjQyNSAwIC43MTMuMjg4VDYgMTl0LS4yODguNzEzVDUgMjB6bTE2LTJ2LThoLTR2OHptLTQuNSAycS0uNjI1IDAtMS4wNjItLjQzN1QxNCAxOC41di05cTAtLjYyNS40MzgtMS4wNjJUMTUuNSA4aDVxLjYyNSAwIDEuMDYzLjQzOFQyMiA5LjV2OXEwIC42MjUtLjQzNyAxLjA2M1QyMC41IDIwem0yLjUtNy41cS4zMjUgMCAuNTM4LS4yMjV0LjIxMi0uNTI1cTAtLjMyNS0uMjEzLS41MzdUMTggMTFxLS4zIDAtLjUyNS4yMTN0LS4yMjUuNTM3cTAgLjMuMjI1LjUyNVQxOCAxMi41bS05LjcgNi43NzVMOCAxOC4yNXEtLjQ3NS0uNDI1LS43MzctMVQ3IDE2dC4yNjMtMS4yNXQuNzM3LTFsLjMtMS4wMjVxLjEtLjMyNS4zNS0uNTI1dC42LS4yaDEuNXEuMzUgMCAuNi4ydC4zNS41MjVsLjMgMS4wMjVxLjQ3NS40MjUuNzM4IDFUMTMgMTZ0LS4yNjIgMS4yNXQtLjczOCAxbC0uMyAxLjAyNXEtLjEuMzI1LS4zNS41MjV0LS42LjJoLTEuNXEtLjM1IDAtLjYtLjJ0LS4zNS0uNTI1TTEwIDE3LjVxLjY1IDAgMS4wNzUtLjQzN1QxMS41IDE2dC0uNDUtMS4wNjJUMTAgMTQuNXQtMS4wNS40MjVUOC41IDE2dC40MjUgMS4wNzVUMTAgMTcuNW04LTMuNSIgLz4KPC9zdmc+Cg=='
 };
+
+var scheduleIcon = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxZW0iIGhlaWdodD0iMWVtIiB2aWV3Qm94PSIwIDAgMjQgMjQiPgoJPHBhdGggZD0iTTAgMGgyNHYyNEgweiIgZmlsbD0ibm9uZSIgLz4KCTxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iY3VycmVudENvbG9yIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiIHN0cm9rZS13aWR0aD0iMiI+CgkJPGNpcmNsZSBjeD0iMTIiIGN5PSIxMyIgcj0iOCIgLz4KCQk8cGF0aCBkPSJNMTIgOXY0bDIgMk01IDNMMiA2bTIwIDBsLTMtM002LjM4IDE4LjdMNCAyMW0xMy42NC0yLjMzTDIwIDIxIiAvPgoJPC9nPgo8L3N2Zz4K';
 
 function apiError(res, fallback) {
 	if (!res || res.success === false)
@@ -217,6 +222,62 @@ function iconPreviewField(value) {
 	]);
 }
 
+function scheduleAlarmIcon() {
+	return E('span', {
+		'class': 'lw-schedule-alarm',
+		'aria-hidden': 'true',
+		'style': '--lw-schedule-icon:url("' + scheduleIcon + '")'
+	});
+}
+
+function optionField(value, label, selected) {
+	var attrs = { value: value };
+	if (selected)
+		attrs.selected = 'selected';
+	return E('option', attrs, label);
+}
+
+function scheduleField(d) {
+	var repeat = d.schedule_repeat || 'daily';
+	var days = d.schedule_days ? String(d.schedule_days).split(',') : [];
+	var disabled = d.schedule_enabled !== '1';
+	var timeAttrs = {
+		name: 'schedule_time',
+		type: 'time',
+		value: d.schedule_time || '09:00'
+	};
+	var repeatAttrs = {
+		name: 'schedule_repeat'
+	};
+	var dayLabels = [
+		[ '1', '周一' ], [ '2', '周二' ], [ '3', '周三' ], [ '4', '周四' ],
+		[ '5', '周五' ], [ '6', '周六' ], [ '7', '周日' ]
+	];
+	if (disabled) {
+		timeAttrs.disabled = 'disabled';
+		repeatAttrs.disabled = 'disabled';
+	}
+
+	return E('div', { 'class': 'lw-field lw-schedule-box' }, [
+		E('span', {}, '定时唤醒'),
+		E('div', { 'class': 'lw-schedule-fields' }, [
+			E('input', timeAttrs),
+			E('select', repeatAttrs, [
+				optionField('daily', '每日', repeat === 'daily'),
+				optionField('workday', '工作日', repeat === 'workday'),
+				optionField('weekend', '周末', repeat === 'weekend'),
+				optionField('custom', '自定义', repeat === 'custom')
+			])
+		]),
+		E('div', { 'class': 'lw-schedule-days' + (repeat === 'custom' ? '' : ' hidden') }, dayLabels.map(function(item) {
+			return E('label', {}, [
+				scheduleDayInput(item[0], days.indexOf(item[0]) >= 0, disabled),
+				E('span', {}, item[1])
+			]);
+		}))
+	]);
+}
+
 function renderIcon(value) {
 	var icon = iconMap[value] || iconMap.other;
 	if (String(icon).indexOf('data:image/svg+xml') === 0)
@@ -230,8 +291,28 @@ function renderIcon(value) {
 function toggleField(name, label, value) {
 	return E('label', { 'class': 'lw-toggle' }, [
 		E('span', {}, label),
-		E('input', { name: name, type: 'checkbox', checked: value === '1' || value === true })
+		checkboxInput(name, value === '1' || value === true)
 	]);
+}
+
+function checkboxInput(name, checked) {
+	var attrs = { name: name, type: 'checkbox', autocomplete: 'off' };
+	if (checked)
+		attrs.checked = 'checked';
+	return E('input', attrs);
+}
+
+function scheduleDayInput(day, checked, disabled) {
+	var attrs = {
+		type: 'checkbox',
+		name: 'schedule_day_' + day,
+		autocomplete: 'off'
+	};
+	if (checked)
+		attrs.checked = 'checked';
+	if (disabled)
+		attrs.disabled = 'disabled';
+	return E('input', attrs);
 }
 
 function textareaField(name, label, value, placeholder) {
@@ -239,6 +320,24 @@ function textareaField(name, label, value, placeholder) {
 		E('span', {}, label),
 		E('textarea', { name: name, placeholder: placeholder || '' }, value || '')
 	]);
+}
+
+function formatMac(mac) {
+	if (!mac || mac === '-')
+		return '-';
+	return String(mac).toUpperCase();
+}
+
+function scrollModalToBottom(body) {
+	var node = body;
+	while (node && node !== document.body) {
+		if (node.scrollHeight > node.clientHeight) {
+			node.scrollTop = node.scrollHeight;
+			return;
+		}
+		node = node.parentNode;
+	}
+	window.scrollTo(0, document.body.scrollHeight);
 }
 
 function fillScannedDevice(body, item) {
@@ -251,7 +350,7 @@ function fillScannedDevice(body, item) {
 	if (name && title)
 		name.value = title;
 	if (mac && item.mac && item.mac !== '-')
-		mac.value = String(item.mac).toUpperCase();
+		mac.value = formatMac(item.mac);
 	if (ip && item.ip)
 		ip.value = item.ip;
 	if (broadcast && item.ip) {
@@ -261,6 +360,7 @@ function fillScannedDevice(body, item) {
 			broadcast.setAttribute('data-auto-broadcast', '1');
 		}
 	}
+	scrollModalToBottom(body);
 }
 
 function renderScanResults(body, wrap, items) {
@@ -282,7 +382,7 @@ function renderScanResults(body, wrap, items) {
 	].concat(items.map(function(item) {
 		return E('div', { 'class': 'lw-scan-row' }, [
 			E('div', {}, item.ip || '-'),
-			E('div', {}, item.mac || '-'),
+			E('div', {}, formatMac(item.mac)),
 			E('div', {}, item.vendor || '-'),
 			E('div', {}, item.hostname || '-'),
 			E('div', {}, E('button', {
@@ -374,12 +474,18 @@ function scanPanel(body) {
 
 function getFormData(node) {
 	var data = {};
+	var scheduleDays = [];
 	Array.prototype.forEach.call(node.querySelectorAll('[name]'), function(el) {
-		if (el.type === 'checkbox')
+		if (el.name.indexOf('schedule_day_') === 0) {
+			if (el.checked)
+				scheduleDays.push(el.name.replace('schedule_day_', ''));
+		}
+		else if (el.type === 'checkbox')
 			data[el.name] = el.checked ? '1' : '0';
 		else
 			data[el.name] = el.value.trim();
 	});
+	data.schedule_days = scheduleDays.join(',');
 	if (!data.broadcast && data.ip) {
 		var p = data.ip.split('.');
 		if (p.length === 4)
@@ -409,6 +515,14 @@ function validateDevice(data) {
 	var port = parseInt(data.port || '9', 10);
 	if (!port || port < 1 || port > 65535)
 		return 'WOL 端口必须为 1 到 65535';
+	if (data.schedule_enabled === '1') {
+		if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(data.schedule_time || ''))
+			return '定时唤醒时间必须为 00:00 到 23:59';
+		if ([ 'daily', 'workday', 'weekend', 'custom' ].indexOf(data.schedule_repeat) < 0)
+			return '定时唤醒重复规则无效';
+		if (data.schedule_repeat === 'custom' && !data.schedule_days)
+			return '请选择定时唤醒的自定义日期';
+	}
 	return null;
 }
 
@@ -418,6 +532,12 @@ function reload(root) {
 		state.deps = res[1].data || {};
 		state.settings = res[2].data || {};
 		if (root) {
+			if (state.modalOpen) {
+				state.modalRoot = root;
+				state.deferredRender = true;
+				setMainBlur(root, true);
+				return;
+			}
 			renderBody(root);
 			startTimers(root);
 		}
@@ -536,22 +656,38 @@ function syncRuntimeTheme(content) {
 }
 
 function setMainBlur(root, enabled) {
-	var node = root && root.querySelector ? root.querySelector('.lan-wake') : null;
-	if (!node)
-		return;
-	node.classList.toggle('is-modal-blurred', !!enabled);
+	var nodes;
+
+	if (document.documentElement)
+		document.documentElement.classList.toggle('lan-wake-modal-open', !!enabled);
+	if (document.body)
+		document.body.classList.toggle('lan-wake-modal-open', !!enabled);
+
+	nodes = root && root.querySelectorAll ? root.querySelectorAll('.lan-wake') : document.querySelectorAll('.lan-wake');
+	nodes.forEach(function(node) {
+		node.classList.toggle('is-modal-blurred', !!enabled);
+	});
 }
 
 function closeModal(root) {
 	ui.hideModal();
+	state.modalOpen = false;
 	setMainBlur(root, false);
 	if (state.modalBlurTimer) {
 		window.clearInterval(state.modalBlurTimer);
 		state.modalBlurTimer = null;
 	}
+	if (state.deferredRender && state.modalRoot) {
+		state.deferredRender = false;
+		renderBody(state.modalRoot);
+		startTimers(state.modalRoot);
+	}
+	state.modalRoot = null;
 }
 
 function showBlurModal(root, title, content, cls) {
+	state.modalOpen = true;
+	state.modalRoot = root;
 	setMainBlur(root, true);
 	ui.showModal(title, content, cls);
 
@@ -560,9 +696,19 @@ function showBlurModal(root, title, content, cls) {
 
 	state.modalBlurTimer = window.setInterval(function() {
 		if (!document.querySelector('.lw-modal')) {
+			state.modalOpen = false;
 			setMainBlur(root, false);
 			window.clearInterval(state.modalBlurTimer);
 			state.modalBlurTimer = null;
+			if (state.deferredRender && state.modalRoot) {
+				state.deferredRender = false;
+				renderBody(state.modalRoot);
+				startTimers(state.modalRoot);
+			}
+			state.modalRoot = null;
+		}
+		else {
+			setMainBlur(root, true);
 		}
 	}, 250);
 }
@@ -820,6 +966,7 @@ function deviceCard(d, root) {
 				meta.text,
 				st === 'waking' ? E('span', { 'class': 'lw-inline-timer', 'data-pending-since': d.pending_since || '' }, elapsed(d.pending_since)) : ''
 			]),
+			d.schedule_enabled === '1' ? scheduleAlarmIcon() : '',
 			E('span', { 'class': 'lw-device-icon ' + meta.cls }, renderIcon(d.icon))
 		]),
 		E('div', { 'class': 'lw-name' }, d.name || '未命名设备'),
@@ -922,7 +1069,7 @@ function filterBar(root) {
 	]);
 }
 
-function formTabs(enabledValue, bootAutoCheck, wakeAutoCheck, broadcastWol) {
+function formTabs(enabledValue, scheduleEnabled, bootAutoCheck, wakeAutoCheck, broadcastWol) {
 	return E('div', { 'class': 'lw-tabs-bar' }, [
 		E('div', { 'class': 'lw-tabs' }, [
 			E('button', { 'class': 'active', 'data-tab': 'base' }, '基本信息'),
@@ -931,19 +1078,26 @@ function formTabs(enabledValue, bootAutoCheck, wakeAutoCheck, broadcastWol) {
 		E('div', { 'class': 'lw-device-toggles' }, [
 			E('label', { 'class': 'lw-enable-inline' }, [
 				E('span', {}, '启用设备'),
-				E('input', { name: 'enabled', type: 'checkbox', checked: enabledValue === '1' || enabledValue === true })
+				checkboxInput('enabled', enabledValue === '1' || enabledValue === true)
 			]),
 			E('label', { 'class': 'lw-enable-inline' }, [
 				E('span', {}, '开机后自动检测'),
-				E('input', { name: 'boot_auto_check', type: 'checkbox', checked: bootAutoCheck !== '0' })
+				checkboxInput('boot_auto_check', bootAutoCheck !== '0')
 			]),
 			E('label', { 'class': 'lw-enable-inline' }, [
 				E('span', {}, '唤醒后自动检测'),
-				E('input', { name: 'wake_auto_check', type: 'checkbox', checked: wakeAutoCheck !== '0' })
+				checkboxInput('wake_auto_check', wakeAutoCheck !== '0')
 			]),
 			E('label', { 'class': 'lw-enable-inline' }, [
+				E('span', {}, '定时唤醒'),
+				checkboxInput('schedule_enabled', scheduleEnabled === '1' || scheduleEnabled === true)
+			]),
+			E('label', {
+				'class': 'lw-enable-inline',
+				'title': '通过广播地址发送 WOL 唤醒包，适用于旁路由、桥接网络或普通唤醒失败的设备。'
+			}, [
 				E('span', {}, '发送到广播地址'),
-				E('input', { name: 'broadcast_wol', type: 'checkbox', checked: broadcastWol === '1' || broadcastWol === true })
+				checkboxInput('broadcast_wol', broadcastWol === '1' || broadcastWol === true)
 			])
 		])
 	]);
@@ -965,12 +1119,19 @@ function submitDeviceForm(body, d, root, btn) {
 
 function showDeviceModal(device, root) {
 	var d = device || {};
+	if (!device) {
+		d.schedule_enabled = '0';
+		d.broadcast_wol = '0';
+		d.schedule_repeat = 'daily';
+		d.schedule_time = '09:00';
+		d.schedule_days = '';
+	}
 	var iconValue = d.icon || 'pc';
 	var body = E('div', { 'class': 'lw-modal-form' }, [
-		formTabs(d.enabled !== '0', d.boot_auto_check, d.wake_auto_check, d.broadcast_wol),
+		formTabs(d.enabled !== '0', d.schedule_enabled, d.boot_auto_check, d.wake_auto_check, d.broadcast_wol),
 		E('div', { 'class': 'lw-tab-panel active', 'data-panel': 'base' }, [
 			E('div', { 'class': 'lw-scan-slot lw-wide' }),
-			field('name', '设备名称 *', d.name, 'text', '例如：NAS 服务器'),
+			field('name', '设备名称 *', d.name, 'text', '例如：服务器'),
 			field('mac', 'MAC 地址 *', d.mac, 'text', '例如：00:11:32:AA:BB:CC'),
 			field('ip', 'IP 地址', d.ip, 'text', '例如：192.168.1.100'),
 			field('broadcast', '广播地址', d.broadcast || state.settings.default_broadcast, 'text', '例如：192.168.1.255'),
@@ -979,14 +1140,17 @@ function showDeviceModal(device, root) {
 				[ 'laptop', '笔记本' ], [ 'pc', '台式电脑' ], [ 'mini', '迷你主机' ], [ 'game', '游戏主机' ],
 				[ 'television', '电视设备' ], [ 'smart_home', '智能家居' ], [ 'devboard', '开发板' ], [ 'other', '其他' ]
 			]),
-			iconPreviewField(iconValue),
+			E('div', { 'class': 'lw-icon-schedule-row' }, [
+				iconPreviewField(iconValue),
+				scheduleField(d)
+			]),
 			textareaField('note', '备注', d.note, '可选，添加设备备注信息')
 		]),
 		E('div', { 'class': 'lw-tab-panel', 'data-panel': 'advanced' }, [
 			field('port', 'WOL 端口', d.port || state.settings.default_port || '9', 'number'),
 			field('check_interval', '检测间隔（秒）', d.check_interval || state.settings.check_interval || '300', 'number'),
 			field('unknown_time', '未知状态时间（秒）', d.unknown_time || state.settings.unknown_time || '300', 'number'),
-			field('offline_time', '离线判定时间（秒）', d.offline_time || state.settings.offline_time || '3600', 'number')
+			field('offline_time', '离线判定时间（秒）', d.offline_time || state.settings.offline_time || '300', 'number')
 		])
 	]);
 
@@ -998,12 +1162,34 @@ function showDeviceModal(device, root) {
 	var broadcastInput = body.querySelector('[name="broadcast"]');
 	var iconSelect = body.querySelector('[name="icon"]');
 	var iconPreview = body.querySelector('.lw-icon-preview-symbol');
+	var scheduleEnabled = body.querySelector('[name="schedule_enabled"]');
+	var scheduleTime = body.querySelector('[name="schedule_time"]');
+	var scheduleRepeat = body.querySelector('[name="schedule_repeat"]');
+	var scheduleDays = body.querySelector('.lw-schedule-days');
+	var scheduleDayInputs = body.querySelectorAll('[name^="schedule_day_"]');
 	if (iconSelect && iconPreview) {
 		iconSelect.addEventListener('change', function() {
 			iconPreview.innerHTML = '';
 			iconPreview.appendChild(renderIcon(iconSelect.value));
 		});
 	}
+	function syncScheduleUi() {
+		var on = scheduleEnabled && scheduleEnabled.checked;
+		if (scheduleTime)
+			scheduleTime.disabled = !on;
+		if (scheduleRepeat)
+			scheduleRepeat.disabled = !on;
+		Array.prototype.forEach.call(scheduleDayInputs, function(input) {
+			input.disabled = !on;
+		});
+		if (scheduleDays)
+			scheduleDays.classList.toggle('hidden', !on || !scheduleRepeat || scheduleRepeat.value !== 'custom');
+	}
+	if (scheduleEnabled)
+		scheduleEnabled.addEventListener('change', syncScheduleUi);
+	if (scheduleRepeat)
+		scheduleRepeat.addEventListener('change', syncScheduleUi);
+	syncScheduleUi();
 	if (ipInput && broadcastInput) {
 		broadcastInput.setAttribute('data-auto-broadcast', d.broadcast ? '0' : '1');
 		ipInput.addEventListener('input', function() {
@@ -1041,7 +1227,7 @@ function showSettingsModal(root) {
 	var s = state.settings || {};
 	var autoCheckToggle = E('label', { 'class': 'lw-settings-auto-check' }, [
 		E('span', {}, '启用定时检测'),
-		E('input', { name: 'auto_check', type: 'checkbox', checked: s.auto_check !== '0' })
+		checkboxInput('auto_check', s.auto_check !== '0')
 	]);
 	var body = E('div', { 'class': 'lw-modal-form' }, [
 		autoCheckToggle,
@@ -1050,7 +1236,7 @@ function showSettingsModal(root) {
 		field('default_port', '默认 WOL 端口', s.default_port || '9', 'number'),
 		field('check_interval', '检测间隔（秒）', s.check_interval || '300', 'number'),
 		field('unknown_time', '未知状态时间（秒）', s.unknown_time || '300', 'number'),
-		field('offline_time', '离线判定时间（秒）', s.offline_time || '3600', 'number'),
+		field('offline_time', '离线判定时间（秒）', s.offline_time || '300', 'number'),
 		field('wake_check_interval', '唤醒后检测间隔（秒）', s.wake_check_interval || '5', 'number'),
 		field('wake_timeout', '唤醒等待超时（秒）', s.wake_timeout || '300', 'number')
 	]);
@@ -1128,18 +1314,20 @@ function css() {
 	'.lan-wake{max-width:1280px}.lw-stats{grid-template-columns:repeat(5,minmax(0,1fr))}.lw-stat.blue .lw-stat-icon{background:#155eef;box-shadow:0 10px 18px rgba(21,94,239,.16)}.lw-filters{grid-template-columns:44px 44px 180px minmax(260px,520px) minmax(280px,1fr)}.lw-row{grid-template-columns:110px 1.4fr 1fr 1.2fr 1fr 2fr;min-width:780px}.lw-filters select,.lw-filters input,.lw-filters>button,.lw-toolbar-actions .btn{height:44px;min-height:44px;box-sizing:border-box}.lw-toolbar-actions .btn{display:inline-flex;align-items:center;justify-content:center;padding:0 14px}.lw-empty,.lw-empty h3,.lw-empty p{background:transparent!important}.modal.lw-modal,.cbi-modal.lw-modal{width:min(1040px,calc(100vw - 64px))!important;max-width:min(1040px,calc(100vw - 64px))!important;overflow-x:hidden!important;position:relative!important}.lw-modal,.lw-modal *{box-sizing:border-box!important}.lw-modal .modal-body,.lw-modal .cbi-section,.lw-modal>div{overflow-x:hidden!important}.lw-modal h4,.lw-modal .modal-title{font-size:16px!important;font-weight:700!important;border-radius:6px!important}.lw-modal-form{min-width:0!important;width:calc(100% - 24px)!important;max-width:calc(100% - 24px)!important;max-height:calc(100vh - 230px);box-sizing:border-box;overflow-y:auto;overflow-x:hidden!important;padding:2px 6px;margin:0 auto}.lw-tab-panel,.lw-field,.lw-toggle{min-width:0;max-width:100%}.lw-tab-panel.active{grid-template-columns:minmax(0,1fr) minmax(0,1fr)!important}.lw-field input,.lw-field select,.lw-field textarea{width:100%!important;max-width:100%!important}.lw-toggle{min-height:48px}.lw-modal-actions{display:flex!important;justify-content:center!important;align-items:center!important;gap:10px;width:calc(100% - 24px)!important;max-width:calc(100% - 24px)!important;box-sizing:border-box;position:sticky;bottom:0;background:#fff;padding:12px 6px 0;margin:12px auto 0;z-index:2;overflow:visible!important;text-align:center!important}.lw-modal-actions .btn{display:inline-flex!important;align-items:center;justify-content:center;float:none!important;position:static!important;margin:0!important;min-width:76px;white-space:nowrap}.lw-modal-actions .cbi-button-positive{background:#155eef!important;border-color:#155eef!important;color:#fff!important}.lw-info-icon{position:relative;top:-1px}.lw-about a,.lw-about-linklike{color:#6F67E0}.lw-copy-mark{top:calc(-.08em + 7px)}' +
 	'.lw-enable-inline input{position:relative!important;top:-1px!important;margin:0!important}.lw-field input,.lw-field select{height:40px!important;min-height:40px!important}.lw-modal-form>.lw-toggle{height:40px!important;min-height:40px!important;padding:0 12px!important;align-self:end!important}.lw-wake-stat-icon{width:23px;height:23px;display:block;background:currentColor;-webkit-mask:url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27black%27%20stroke-width%3D%272.3%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Cpath%20d%3D%27M21%2012a9%209%200%200%201-15%206.7L3%2016%27/%3E%3Cpath%20d%3D%27M3%2021v-5h5%27/%3E%3Cpath%20d%3D%27M3%2012a9%209%200%200%201%2015-6.7L21%208%27/%3E%3Cpath%20d%3D%27M21%203v5h-5%27/%3E%3C/svg%3E") center/23px 23px no-repeat;mask:url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%270%200%2024%2024%27%20fill%3D%27none%27%20stroke%3D%27black%27%20stroke-width%3D%272.3%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Cpath%20d%3D%27M21%2012a9%209%200%200%201-15%206.7L3%2016%27/%3E%3Cpath%20d%3D%27M3%2021v-5h5%27/%3E%3Cpath%20d%3D%27M3%2012a9%209%200%200%201%2015-6.7L21%208%27/%3E%3Cpath%20d%3D%27M21%203v5h-5%27/%3E%3C/svg%3E") center/23px 23px no-repeat}.lw-svg-icon{display:block;width:24px;height:24px;background:currentColor;-webkit-mask:var(--lw-icon-url) center/contain no-repeat;mask:var(--lw-icon-url) center/contain no-repeat}.lw-icon-preview{height:40px!important;min-height:40px!important;box-sizing:border-box!important;margin:0!important;padding:0 12px!important;align-items:center!important;justify-content:flex-start!important}.lw-icon-preview-field .lw-icon-preview{position:relative!important;top:10px!important;margin-top:0!important}.lw-icon-preview-symbol{display:inline-flex!important;align-items:center!important;justify-content:center!important;line-height:1!important}.lw-settings-auto-check{position:absolute;top:33px;right:32px;z-index:3;display:flex;align-items:center;gap:6px;font-weight:700;color:#344054;white-space:nowrap}.lw-settings-auto-check span{margin:0}.lw-settings-auto-check input{position:relative!important;top:-1px!important;margin:0!important}.lw-filters{grid-template-columns:44px 44px 131px 245px minmax(260px,1fr)!important}.lw-grid{grid-template-columns:repeat(5,minmax(0,1fr))!important;gap:14px!important}.lw-card{padding:14px!important}.lw-actions{gap:6px!important}.lw-actions .btn{padding:7px 9px!important}' +
 	'.lw-icon-preview-field .lw-icon-preview{border-color:transparent!important;background:transparent!important;padding:0!important}.lw-icon-preview-field .lw-icon-preview-symbol{background:transparent!important;width:44px!important;height:40px!important;font-size:32px!important}.lw-icon-preview-field .lw-svg-icon{width:32px!important;height:32px!important}.lw-backend-wait{border:1px dashed #cbd5e1;border-radius:12px;background:#f8fafc;padding:36px 18px;text-align:center}.lw-backend-wait h3{margin:0 0 10px;font-size:18px;color:#1f1b4d}.lw-backend-wait p{margin:6px 0;color:#475467}.lw-backend-detail{font-size:12px;color:#98a2b3!important;word-break:break-all}' +
-	'.lw-device-toggles{display:flex;align-items:center;justify-content:flex-end;gap:16px;flex-wrap:wrap;margin-left:auto}.lw-device-toggles .lw-enable-inline{margin:0}.lw-device-toggles .lw-enable-inline input{top:0!important}.lw-status-dot.online{background:#00966B!important}.lw-device-icon.online{background:rgba(0,150,107,.10)!important;color:#00966B!important}.lw-device-icon.offline{background:rgba(239,68,68,.10)!important;color:#ef4444!important}.lw-device-icon.waking{background:rgba(241,164,41,.13)!important;color:#F1A429!important}.lw-device-icon.unknown,.lw-device-icon.unchecked{background:rgba(102,112,133,.10)!important;color:#98a2b3!important}.lw-card[draggable=true]{cursor:grab}.lw-card.is-dragging{opacity:.45}.lw-card.is-drop-target{outline:2px dashed #155eef;outline-offset:4px;box-shadow:0 0 0 4px rgba(21,94,239,.08)!important}' +
+	'.lw-device-toggles{display:flex;align-items:center;justify-content:flex-end;gap:16px;flex-wrap:wrap;margin-left:auto}.lw-device-toggles .lw-enable-inline{margin:0}.lw-device-toggles .lw-enable-inline input{top:-1px!important}.lw-status-dot.online{background:#00966B!important}.lw-device-icon.online{background:rgba(0,150,107,.10)!important;color:#00966B!important}.lw-device-icon.offline{background:rgba(239,68,68,.10)!important;color:#ef4444!important}.lw-device-icon.waking{background:rgba(241,164,41,.13)!important;color:#F1A429!important}.lw-device-icon.unknown,.lw-device-icon.unchecked{background:rgba(102,112,133,.10)!important;color:#98a2b3!important}.lw-card[draggable=true]{cursor:grab}.lw-card.is-dragging{opacity:.45}.lw-card.is-drop-target{outline:2px dashed #155eef;outline-offset:4px;box-shadow:0 0 0 4px rgba(21,94,239,.08)!important}' +
 	'.lw-scan-panel{border:1px solid #e5eaf3;border-radius:8px;background:#f8fafc;padding:12px;margin-bottom:4px}.lw-scan-title{display:flex;align-items:center;justify-content:space-between;gap:12px;color:#344054;font-weight:800}.lw-scan-title .cbi-button-positive{background:#155eef!important;border-color:#155eef!important;color:#fff!important}.lw-scan-title .cbi-button-positive[disabled]{opacity:.65}.lw-scan-results{margin-top:10px}.lw-scan-empty{border:1px dashed #cbd5e1;border-radius:8px;padding:14px;text-align:center;color:#667085;background:#fff}.lw-scan-error{color:#b42318;border-color:#fecaca;background:#fff7f7}.lw-scan-table{border:1px solid #e5eaf3;border-radius:8px;overflow:auto;background:#fff}.lw-scan-row{display:grid;grid-template-columns:1fr 1.25fr 1.2fr 1.2fr 78px;gap:10px;align-items:center;padding:9px 12px;border-top:1px solid #eef2f7;min-width:760px;color:#344054}.lw-scan-row:first-child{border-top:0}.lw-scan-head{background:#f8fafc;color:#344054;font-weight:800}.lw-scan-row .btn{padding:6px 10px!important}' +
 	'.lan-wake.is-modal-blurred{filter:blur(8px);opacity:.62;pointer-events:none;user-select:none;transition:filter .18s ease,opacity .18s ease}.lan-wake.lan-wake-dark.is-modal-blurred{opacity:.48}' +
 	'.lw-inline-timer{margin-left:8px;color:#b45309;font-weight:800}' +
 	'.lw-wake-btn{background:#fff!important;border-color:#00966B!important;color:#00966B!important}.lw-wake-btn-waking{background:#fff!important;border-color:#F1A429!important;color:#F1A429!important}' +
+	'.lw-icon-schedule-row{display:grid;grid-template-columns:72px minmax(0,1fr);gap:12px;align-items:start;min-width:0}.lw-icon-schedule-row .lw-icon-preview-field{min-width:0}.lw-icon-schedule-row .lw-icon-preview-field>span{white-space:nowrap}.lw-schedule-box{min-width:0}.lw-schedule-box>span{display:block;width:256px;margin-left:auto}.lw-schedule-fields{display:grid;grid-template-columns:124px 124px;gap:8px;justify-content:end}.lw-schedule-fields select{grid-column:1}.lw-schedule-fields input{grid-column:2;grid-row:1}.lw-schedule-fields input,.lw-schedule-fields select{width:100%;min-width:0}.lw-schedule-days{display:flex;gap:5px;flex-wrap:nowrap;margin-top:8px;justify-content:flex-end;white-space:nowrap}.lw-schedule-days.hidden{display:none!important}.lw-schedule-days label{display:inline-flex;align-items:center;border:1px solid #d7deea;border-radius:7px;padding:2px 6px;background:#fff;color:#344054;font-weight:600;line-height:18px;white-space:nowrap;position:relative}.lw-schedule-days input[type="checkbox"]{appearance:none!important;-webkit-appearance:none!important;width:15px!important;height:15px!important;min-width:15px!important;min-height:15px!important;max-width:15px!important;max-height:15px!important;margin:0!important;position:absolute!important;left:6px!important;top:4px!important;opacity:0!important;transform:none!important}.lw-schedule-days span{display:inline-flex!important;align-items:center!important;gap:3px!important;margin:0!important;font-size:12px!important;line-height:18px!important;font-weight:600!important;position:relative!important}.lw-schedule-days span:before{content:"";display:inline-block;width:15px;height:15px;min-width:15px;border:1px solid #bfc8d8;border-radius:4px;background:#fff;box-sizing:border-box;position:relative;top:-1px}.lw-schedule-days input[type="checkbox"]:checked+span:before{background:#6f67e0;border-color:#6f67e0}.lw-schedule-days input[type="checkbox"]:checked+span:after{content:"";position:absolute;left:2px;top:2px;width:11px;height:11px;background:#fff;-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Cpath fill=%27black%27 d=%27M6.2 11.2 2.7 7.8 1.3 9.2l4.9 4.9 8.5-8.5-1.4-1.4z%27/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Cpath fill=%27black%27 d=%27M6.2 11.2 2.7 7.8 1.3 9.2l4.9 4.9 8.5-8.5-1.4-1.4z%27/%3E%3C/svg%3E") center/contain no-repeat}.lw-schedule-alarm{margin-left:auto;width:24px;height:24px;border-radius:50%;background:rgba(241,164,41,.13);display:inline-flex;align-items:center;justify-content:center;color:#F1A429}.lw-schedule-alarm:before{content:"";display:block;width:16px;height:16px;background:currentColor;-webkit-mask:var(--lw-schedule-icon) center/contain no-repeat;mask:var(--lw-schedule-icon) center/contain no-repeat}.lw-schedule-alarm+.lw-device-icon{margin-left:6px}' +
 	'.lw-row-head{color:#344054!important;font-weight:800}.lw-list-head{color:#344054;font-weight:800}.lw-row:not(.lw-row-head){color:#344054}.lw-list-status{display:flex;align-items:center;gap:8px;font-weight:700;color:#344054}.lw-list-device{font-weight:800;color:#101828}.lw-list-ip,.lw-list-mac{color:#1f2a44;font-weight:500}.lw-list-seen{color:#344054;font-weight:700}.lw-list-actions{color:#344054}' +
 	'.lan-wake.lan-wake-dark .lw-row-head,.lan-wake.lan-wake-dark .lw-list-head{color:#CCCCCC!important}.lan-wake.lan-wake-dark .lw-row:not(.lw-row-head){color:#e5e7eb!important}.lan-wake.lan-wake-dark .lw-list-status,.lan-wake.lan-wake-dark .lw-list-seen,.lan-wake.lan-wake-dark .lw-list-actions{color:#CCCCCC!important}.lan-wake.lan-wake-dark .lw-list-device{color:#f2f4f7!important}.lan-wake.lan-wake-dark .lw-list-ip,.lan-wake.lan-wake-dark .lw-list-mac{color:#d0d5dd!important}' +
 	'@media (max-width:1250px){.lw-grid{grid-template-columns:repeat(4,minmax(0,1fr))!important}}@media (max-width:1000px){.lw-grid{grid-template-columns:repeat(3,minmax(0,1fr))!important}}@media (max-width:760px){.lw-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}}' +
 	'.lan-wake.lan-wake-dark{--ls-panel:rgba(255,255,255,.18);--ls-panel-soft:rgba(255,255,255,.24);--ls-border:rgba(255,255,255,.16);color:#e5e7eb}.lan-wake.lan-wake-dark .lw-head h2{background:var(--ls-panel);border:1px solid var(--ls-border);color:#CCCCCC;box-shadow:0 8px 18px rgba(0,0,0,.18)}.lan-wake.lan-wake-dark .lw-card,.lan-wake.lan-wake-dark .lw-stat,.lan-wake.lan-wake-dark .lw-table,.lan-wake.lan-wake-dark .lw-about,.lan-wake.lan-wake-dark .lw-backend-wait{background:var(--ls-panel)!important;border-color:var(--ls-border)!important;color:#e5e7eb;box-shadow:0 1px 3px rgba(0,0,0,.16)}.lan-wake.lan-wake-dark .lw-card.st-online,.lan-wake.lan-wake-dark .lw-card.st-offline,.lan-wake.lan-wake-dark .lw-card.st-waking,.lan-wake.lan-wake-dark .lw-card.st-shutting,.lan-wake.lan-wake-dark .lw-card.st-unknown,.lan-wake.lan-wake-dark .lw-card.st-unchecked{background:var(--ls-panel)!important}.lan-wake.lan-wake-dark .btn,.lan-wake.lan-wake-dark .lw-filters input,.lan-wake.lan-wake-dark .lw-filters select,.lan-wake.lan-wake-dark .lw-field input,.lan-wake.lan-wake-dark .lw-field select,.lan-wake.lan-wake-dark .lw-field textarea{background:var(--ls-panel-soft)!important;color:#e5e7eb!important;border-color:var(--ls-border)!important}.lan-wake.lan-wake-dark .cbi-button-positive{background:var(--lw-blue)!important;color:#fff!important;border-color:var(--lw-blue)!important}.lan-wake.lan-wake-dark .lw-head p,.lan-wake.lan-wake-dark .lw-stat-label,.lan-wake.lan-wake-dark .lw-meta,.lan-wake.lan-wake-dark .lw-about-left,.lan-wake.lan-wake-dark .lw-about-right,.lan-wake.lan-wake-dark .lw-about-label,.lan-wake.lan-wake-dark .lw-addr,.lan-wake.lan-wake-dark .lw-backend-wait p{color:#d0d5dd!important}.lan-wake.lan-wake-dark .lw-name,.lan-wake.lan-wake-dark .lw-meta b,.lan-wake.lan-wake-dark .lw-field span,.lan-wake.lan-wake-dark .lw-toggle span,.lan-wake.lan-wake-dark .lw-about-title,.lan-wake.lan-wake-dark .lw-status-text,.lan-wake.lan-wake-dark .lw-stat-value,.lan-wake.lan-wake-dark .lw-empty h3,.lan-wake.lan-wake-dark .lw-backend-wait h3{color:#CCCCCC!important}.lan-wake.lan-wake-dark .lw-row-head,.lan-wake.lan-wake-dark .lw-empty{background:var(--ls-panel)!important;border-color:var(--ls-border)!important}.lan-wake.lan-wake-dark .lw-row{border-color:var(--ls-border)!important}.lan-wake.lan-wake-dark .lw-device-icon{background:rgba(255,255,255,.14)!important}.lan-wake.lan-wake-dark .lw-modal-actions{background:transparent}.lan-wake.lan-wake-dark .lw-wake-btn,.lan-wake.lan-wake-dark .lw-wake-btn-waking{background:transparent!important}.lan-wake.lan-wake-dark .lw-about a,.lan-wake.lan-wake-dark .lw-about-linklike{color:#9b94ff!important}' +
 	'.lan-wake-dark-page .lw-scan-panel,.lan-wake-dark-page .lw-scan-table,.lan-wake-dark-page .lw-scan-empty{background:var(--ls-panel)!important;border-color:var(--ls-border)!important;color:#d0d5dd!important}.lan-wake-dark-page .lw-scan-title,.lan-wake-dark-page .lw-scan-head{color:#CCCCCC!important}.lan-wake-dark-page .lw-scan-head{background:var(--ls-panel-soft)!important}.lan-wake-dark-page .lw-scan-row{border-color:var(--ls-border)!important;color:#e5e7eb!important}' +
+	'.lan-wake-dark-page .lw-schedule-days label{background:var(--ls-panel-soft)!important;border-color:var(--ls-border)!important;color:#e5e7eb!important}.lan-wake-dark-page .lw-schedule-alarm{background:rgba(241,164,41,.18)!important;color:#F1A429!important}' +
 	'.lan-wake-dark-page{--ls-panel:rgba(255,255,255,.18);--ls-panel-soft:rgba(255,255,255,.24);--ls-border:rgba(255,255,255,.16)}.lan-wake-dark-page .modal.lw-modal,.lan-wake-dark-page .cbi-modal.lw-modal{background:var(--ls-panel)!important;border:1px solid var(--ls-border)!important;color:#e5e7eb!important;box-shadow:0 18px 48px rgba(0,0,0,.45)!important}.lan-wake-dark-page .lw-modal h4,.lan-wake-dark-page .lw-modal .modal-title{background:var(--ls-panel-soft)!important;color:#CCCCCC!important;border-color:var(--ls-border)!important}.lan-wake-dark-page .lw-modal .modal-body,.lan-wake-dark-page .lw-modal .cbi-section,.lan-wake-dark-page .lw-modal>div{background:transparent!important;color:#e5e7eb!important}.lan-wake-dark-page .lw-modal-form,.lan-wake-dark-page .lw-tab-panel,.lan-wake-dark-page .lw-tabs-bar{background:transparent!important;border-color:var(--ls-border)!important}.lan-wake-dark-page .lw-modal .lw-field input,.lan-wake-dark-page .lw-modal .lw-field select,.lan-wake-dark-page .lw-modal .lw-field textarea{background:var(--ls-panel-soft)!important;color:#e5e7eb!important;border-color:var(--ls-border)!important;box-shadow:none!important}.lan-wake-dark-page .lw-modal .lw-field select,.lan-wake.lan-wake-dark .lw-filters select,.lan-wake.lan-wake-dark .lw-field select{color-scheme:dark;background-color:rgba(255,255,255,.24)!important;color:#e5e7eb!important}.lan-wake-dark-page .lw-modal .lw-field select option,.lan-wake.lan-wake-dark select option{background:#2b2d31!important;color:#e5e7eb!important}.lan-wake-dark-page .lw-modal .lw-field select option:checked,.lan-wake.lan-wake-dark select option:checked{background:#4f46e5!important;color:#fff!important}.lan-wake-dark-page .lw-modal .lw-field select option:hover,.lan-wake.lan-wake-dark select option:hover{background:#3b3d44!important;color:#fff!important}.lan-wake-dark-page .lw-modal .lw-field input:focus,.lan-wake-dark-page .lw-modal .lw-field select:focus,.lan-wake-dark-page .lw-modal .lw-field textarea:focus{border-color:#8b84ff!important;box-shadow:0 0 0 2px rgba(139,132,255,.22)!important}.lan-wake-dark-page .lw-modal .lw-field input::placeholder,.lan-wake-dark-page .lw-modal .lw-field textarea::placeholder{color:#b8c0cc!important}.lan-wake-dark-page .lw-modal .lw-field span,.lan-wake-dark-page .lw-modal .lw-toggle span,.lan-wake-dark-page .lw-modal .lw-enable-inline,.lan-wake-dark-page .lw-modal .lw-settings-auto-check{color:#CCCCCC!important}.lan-wake-dark-page .lw-modal .lw-tabs button{color:#b8c0cc!important}.lan-wake-dark-page .lw-modal .lw-tabs button.active{color:#8b84ff!important;border-bottom-color:#8b84ff!important}.lan-wake-dark-page .lw-modal .lw-icon-preview{background:transparent!important;border-color:transparent!important;color:#cdd3df!important}.lan-wake-dark-page .lw-modal .lw-modal-actions{background:transparent!important;border-color:transparent!important}.lan-wake-dark-page .lw-modal .btn{background:var(--ls-panel-soft)!important;color:#e5e7eb!important;border-color:var(--ls-border)!important}.lan-wake-dark-page .lw-modal .cbi-button-positive{background:#4f46e5!important;color:#fff!important;border-color:#4f46e5!important}' +
-	'@media (max-width:1100px){.lw-filters{grid-template-columns:44px 44px 1fr 1fr}.lw-filters input{grid-column:1/-1}.lw-toolbar-actions{grid-column:1/-1;justify-content:flex-end}}@media (max-width:900px){.lw-head{display:block}.lw-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.lw-about-body{display:block}.lw-about-right{text-align:left;margin-top:12px;white-space:normal}.lw-modal-form,.lw-tab-panel.active{grid-template-columns:1fr;min-width:0}.lw-wide{grid-column:auto}}@media (max-width:560px){.lw-stats,.lw-filters,.lw-grid{grid-template-columns:1fr}.lw-toolbar-actions{justify-content:stretch}.lw-toolbar-actions .btn{flex:1}.lw-card{border-radius:8px}.lw-actions .btn{flex:1;text-align:center}.lw-head h2{font-size:22px}}';
+	'@media (max-width:1100px){.lw-filters{grid-template-columns:44px 44px 1fr 1fr}.lw-filters input{grid-column:1/-1}.lw-toolbar-actions{grid-column:1/-1;justify-content:flex-end}}@media (max-width:900px){.lw-head{display:block}.lw-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.lw-about-body{display:block}.lw-about-right{text-align:left;margin-top:12px;white-space:normal}.lw-modal-form,.lw-tab-panel.active{grid-template-columns:1fr;min-width:0}.lw-wide{grid-column:auto}.lw-icon-schedule-row{grid-template-columns:1fr}}@media (max-width:560px){.lw-stats,.lw-filters,.lw-grid{grid-template-columns:1fr}.lw-toolbar-actions{justify-content:stretch}.lw-toolbar-actions .btn{flex:1}.lw-card{border-radius:8px}.lw-actions .btn{flex:1;text-align:center}.lw-head h2{font-size:22px}.lw-schedule-fields{grid-template-columns:1fr}}';
 }
 
 return view.extend({

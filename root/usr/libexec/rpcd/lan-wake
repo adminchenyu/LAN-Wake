@@ -9,6 +9,9 @@ RUNDIR="/tmp/lan-wake"
 VENDOR_CACHE="$RUNDIR/mac-vendors.tsv"
 VENDOR_UPDATER="/usr/libexec/lan-wake-update-mac-vendors.sh"
 SCAN_DIR="$RUNDIR/scans"
+CRON_FILE="/etc/crontabs/root"
+SCHEDULE_BEGIN="# lan-wake schedule begin"
+SCHEDULE_END="# lan-wake schedule end"
 
 ok() {
 	json_init
@@ -78,6 +81,33 @@ valid_port() {
 valid_name() {
 	[ -n "$1" ] || return 1
 	printf '%s' "$1" | grep -Eq '[;&|`$<>]' && return 1
+	return 0
+}
+
+valid_time_hhmm() {
+	printf '%s' "$1" | grep -Eq '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+}
+
+valid_schedule_repeat() {
+	case "$1" in
+		daily|workday|weekend|custom) return 0 ;;
+	esac
+	return 1
+}
+
+valid_schedule_days() {
+	local oldifs="$IFS" d
+	[ -n "$1" ] || return 1
+	IFS=,
+	for d in $1; do
+		IFS="$oldifs"
+		case "$d" in
+			1|2|3|4|5|6|7) ;;
+			*) IFS="$oldifs"; return 1 ;;
+		esac
+		IFS=,
+	done
+	IFS="$oldifs"
 	return 0
 }
 
@@ -323,7 +353,7 @@ json_device() {
 	local s="$1" status="$2"
 	json_add_object
 	json_add_string id "$s"
-	for opt in name mac ip broadcast port group note enabled icon order check_interval wake_auto_check boot_auto_check broadcast_wol offline_time unknown_time last_seen_at last_checked_at failed_since pending_since pending_status; do
+	for opt in name mac ip broadcast port group note enabled icon order check_interval wake_auto_check boot_auto_check broadcast_wol schedule_enabled schedule_time schedule_repeat schedule_days offline_time unknown_time last_seen_at last_checked_at failed_since pending_since pending_status; do
 		local v
 		v="$(uci -q get "$CONFIG.$s.$opt")"
 		[ "$opt" = "mac" ] && v="$(normalize_mac "$v")"
@@ -372,7 +402,7 @@ check_and_update() {
 	[ -n "$unknown_time" ] || unknown_time="$(uci -q get "$CONFIG.settings.unknown_time")"
 	[ -n "$offline_time" ] || offline_time="$(uci -q get "$CONFIG.settings.offline_time")"
 	[ -n "$unknown_time" ] || unknown_time=300
-	[ -n "$offline_time" ] || offline_time=3600
+	[ -n "$offline_time" ] || offline_time=300
 	[ -n "$wake_timeout" ] || wake_timeout=120
 
 	if check_device_raw "$s"; then
@@ -417,6 +447,7 @@ check_and_update() {
 validate_device_input() {
 	local editing="$1"
 	get_in name; get_in mac; get_in ip; get_in broadcast; get_in port
+	get_in schedule_enabled; get_in schedule_time; get_in schedule_repeat; get_in schedule_days
 	valid_name "$name" || fail "设备名称不能为空，且不能包含危险字符"
 	valid_mac "$mac" || fail "MAC 地址格式错误"
 	[ -z "$ip" ] || valid_ipv4 "$ip" || fail "IP 地址格式错误"
@@ -424,11 +455,20 @@ validate_device_input() {
 	[ -n "$port" ] || port="$(uci -q get "$CONFIG.settings.default_port")"
 	[ -n "$port" ] || port=9
 	valid_port "$port" || fail "WOL 端口必须为 1 到 65535"
+	if [ "$schedule_enabled" = "1" ]; then
+		[ -n "$schedule_time" ] || schedule_time="09:00"
+		valid_time_hhmm "$schedule_time" || fail "定时唤醒时间必须为 00:00 到 23:59"
+		[ -n "$schedule_repeat" ] || schedule_repeat="daily"
+		valid_schedule_repeat "$schedule_repeat" || fail "定时唤醒重复规则无效"
+		if [ "$schedule_repeat" = "custom" ]; then
+			valid_schedule_days "$schedule_days" || fail "定时唤醒自定义日期无效"
+		fi
+	fi
 }
 
 set_device_options() {
 	local s="$1" opt val
-	for opt in name mac ip broadcast port group note enabled icon check_interval wake_auto_check boot_auto_check broadcast_wol offline_time unknown_time; do
+	for opt in name mac ip broadcast port group note enabled icon check_interval wake_auto_check boot_auto_check broadcast_wol schedule_enabled schedule_time schedule_repeat schedule_days offline_time unknown_time; do
 		json_get_var val "$opt"
 		[ "$opt" = "mac" ] && val="$(normalize_mac "$val")"
 		if [ -n "$val" ]; then
@@ -440,6 +480,9 @@ set_device_options() {
 	[ -n "$(uci -q get "$CONFIG.$s.enabled")" ] || uci -q set "$CONFIG.$s.enabled=1"
 	[ -n "$(uci -q get "$CONFIG.$s.port")" ] || uci -q set "$CONFIG.$s.port=9"
 	[ -n "$(uci -q get "$CONFIG.$s.icon")" ] || uci -q set "$CONFIG.$s.icon=pc"
+	[ -n "$(uci -q get "$CONFIG.$s.schedule_enabled")" ] || uci -q set "$CONFIG.$s.schedule_enabled=0"
+	[ -n "$(uci -q get "$CONFIG.$s.schedule_time")" ] || uci -q set "$CONFIG.$s.schedule_time=09:00"
+	[ -n "$(uci -q get "$CONFIG.$s.schedule_repeat")" ] || uci -q set "$CONFIG.$s.schedule_repeat=daily"
 	[ -n "$(uci -q get "$CONFIG.$s.order")" ] || uci -q set "$CONFIG.$s.order=$(date +%s)"
 	[ -n "$(uci -q get "$CONFIG.$s.status")" ] || uci -q set "$CONFIG.$s.status=unchecked"
 }
@@ -486,6 +529,7 @@ add_device() {
 	uci -q set "$CONFIG.$sid=device"
 	set_device_options "$sid"
 	commit_cfg
+	refresh_schedule_cron || fail "刷新定时唤醒任务失败"
 	ok "设备已添加" "json_add_string id '$sid'"
 }
 
@@ -497,6 +541,7 @@ update_device() {
 	validate_device_input 1
 	set_device_options "$id"
 	commit_cfg
+	refresh_schedule_cron || fail "刷新定时唤醒任务失败"
 	ok "设备已更新" "json_add_string id '$id'"
 }
 
@@ -507,6 +552,7 @@ delete_device() {
 	section_exists "$id" || fail "设备不存在"
 	uci -q delete "$CONFIG.$id"
 	commit_cfg
+	refresh_schedule_cron || fail "刷新定时唤醒任务失败"
 	ok "设备已删除"
 }
 
@@ -525,6 +571,87 @@ update_order() {
 	json_select ..
 	commit_cfg
 	ok "排序已保存"
+}
+
+cron_dow_for_device() {
+	local repeat="$1" days="$2" oldifs d out
+	case "$repeat" in
+		daily|"") printf '%s\n' "*" ;;
+		workday) printf '%s\n' "1-5" ;;
+		weekend) printf '%s\n' "6,0" ;;
+		custom)
+			oldifs="$IFS"
+			IFS=,
+			out=""
+			for d in $days; do
+				[ "$d" = "7" ] && d="0"
+				case "$d" in
+					0|1|2|3|4|5|6)
+						[ -n "$out" ] && out="$out,"
+						out="$out$d"
+					;;
+				esac
+			done
+			IFS="$oldifs"
+			[ -n "$out" ] && printf '%s\n' "$out" || printf '%s\n' "*"
+		;;
+		*) printf '%s\n' "*" ;;
+	esac
+}
+
+append_schedule_cron_line() {
+	local s="$1" file="$2" enabled time repeat days hour minute dow
+	enabled="$(uci -q get "$CONFIG.$s.schedule_enabled")"
+	[ "$enabled" = "1" ] || return 0
+	[ "$(uci -q get "$CONFIG.$s.enabled")" = "0" ] && return 0
+	time="$(uci -q get "$CONFIG.$s.schedule_time")"
+	repeat="$(uci -q get "$CONFIG.$s.schedule_repeat")"
+	days="$(uci -q get "$CONFIG.$s.schedule_days")"
+	valid_time_hhmm "$time" || return 0
+	[ -n "$repeat" ] || repeat="daily"
+	valid_schedule_repeat "$repeat" || repeat="daily"
+	if [ "$repeat" = "custom" ] && ! valid_schedule_days "$days"; then
+		return 0
+	fi
+	minute="${time#*:}"
+	hour="${time%:*}"
+	dow="$(cron_dow_for_device "$repeat" "$days")"
+	printf '%s %s * * %s /usr/libexec/rpcd/lan-wake schedule_wake %s >/dev/null 2>&1\n' "$minute" "$hour" "$dow" "$s" >> "$file"
+}
+
+refresh_schedule_cron() {
+	local dir tmp body schedules
+	dir="$(dirname "$CRON_FILE")"
+	tmp="$RUNDIR/cron.$$"
+	body="$RUNDIR/cron-body.$$"
+	schedules="$RUNDIR/cron-schedules.$$"
+	mkdir -p "$RUNDIR" "$dir" || return 1
+	[ -f "$CRON_FILE" ] || : > "$CRON_FILE"
+	awk -v begin="$SCHEDULE_BEGIN" -v end="$SCHEDULE_END" '
+		$0 == begin { skip = 1; next }
+		$0 == end { skip = 0; next }
+		!skip { print }
+	' "$CRON_FILE" > "$body" || return 1
+	: > "$schedules" || return 1
+	config_load "$CONFIG"
+	config_foreach append_schedule_cron_line device "$schedules"
+	cat "$body" > "$tmp" || return 1
+	printf '%s\n' "$SCHEDULE_BEGIN" >> "$tmp"
+	cat "$schedules" >> "$tmp"
+	printf '%s\n' "$SCHEDULE_END" >> "$tmp"
+	mv "$tmp" "$CRON_FILE" || return 1
+	rm -f "$body" "$schedules"
+	/etc/init.d/cron reload >/dev/null 2>&1 || /etc/init.d/cron restart >/dev/null 2>&1 || true
+	return 0
+}
+
+schedule_wake_device() {
+	local id="$1" payload
+	valid_id "$id" || exit 1
+	section_exists "$id" || exit 1
+	payload="{\"payload\":{\"id\":\"$id\"}}"
+	ubus call lan-wake wake_device "$payload" >/dev/null 2>&1 || exit 1
+	exit 0
 }
 
 wake_device() {
@@ -820,6 +947,9 @@ update_settings() {
 }
 
 case "$1" in
+	schedule_wake)
+		schedule_wake_device "$2"
+	;;
 	list)
 		cat <<'EOF'
 {

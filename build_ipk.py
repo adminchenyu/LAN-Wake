@@ -90,8 +90,6 @@ def add_binary(tar, name, data, mode=0o644):
 def write_ar_member(out, name, data, mode=0o100644):
     if name.startswith("./"):
         name = name[2:]
-    if not name.endswith("/"):
-        name = name + "/"
     if len(name) > 16:
         raise ValueError(f"ar member name too long: {name}")
     header = (
@@ -154,15 +152,15 @@ def main():
     shutil.copy2(SRC / "po" / "zh-cn" / "lan-wake.po", i18n_dir / "lan-wake.zh-cn.po")
     gz_tar(data_tgz, lambda tar: add_tree(tar, data_root))
 
-    debian_binary.write_bytes(b"2.0\r\n")
+    debian_binary.write_bytes(b"2.0\n")
 
     ipk = DIST / f"{PKG}_{VERSION}-{RELEASE}_{ARCH}.ipk"
     gz_tar(
         ipk,
         lambda tar: (
             add_binary(tar, "./debian-binary", debian_binary.read_bytes()),
-            add_binary(tar, "./control.tar.gz", control_tgz.read_bytes()),
             add_binary(tar, "./data.tar.gz", data_tgz.read_bytes()),
+            add_binary(tar, "./control.tar.gz", control_tgz.read_bytes()),
         ),
     )
     print(ipk)
